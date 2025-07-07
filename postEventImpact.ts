@@ -38,3 +38,9 @@ export const postEventImpact = async (
   }
   return res.json() as Promise<ImpactResponse>;
 };
+
+const mutation = useMutation({
+  mutationFn: postEventImpact,           // now uses your new payload
+  onSuccess: (_, desc) =>
+    setHistory((h) => [{ id: Date.now(), description: desc }, ...h]),
+});
