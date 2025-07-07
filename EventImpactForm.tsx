@@ -1,4 +1,5 @@
-// src/components/EventImpactForm.tsx
+// src/components/EventImpactForm.tsx  npm i react-markdown remark-gfm     # or:  yarn add react-markdown remark-gfm
+
 import React, { useRef } from "react";
 import { UseMutationResult } from "@tanstack/react-query";
 import ReactMarkdown from "react-markdown";
