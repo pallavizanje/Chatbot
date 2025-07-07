@@ -14,9 +14,13 @@ import { postIndustryTopics } from "@/api/postIndustryTopics";
 import type { ImpactRow, ImpactResponse } from "@/types";
 
 /* ------------------------------------------------------------------ */
-/*  Configuration                                                      */
+/*  Local helpers & constants                                          */
 /* ------------------------------------------------------------------ */
 
+/** Substitute with your real auth retrieval */
+const getAccessToken = () => localStorage.getItem("access_token") ?? "";
+
+/** Keywords to show before any API call succeeds */
 const MOCK_KEYWORDS = [
   "Downtime",
   "Compliance",
@@ -25,38 +29,46 @@ const MOCK_KEYWORDS = [
   "SLA breach",
 ];
 
-/* Pull your token from auth context, Redux, or localStorage */
-const getAccessToken = () => localStorage.getItem("access_token") ?? "";
+/** Tab metadata */
+const TABS = [
+  { key: "input",  label: "Event Impact Enstetor" },
+  { key: "table",  label: "Impacted Policies"    },
+  { key: "topics", label: "Industry Topics"      },
+] as const;
 
 /* ------------------------------------------------------------------ */
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
 const EventImpactAccessor: React.FC = () => {
-  /* local state ---------------------------------------------------- */
+  /* ----------------------------- state ---------------------------- */
   const [description, setDescription] = useState("");
   const [history,     setHistory]     = useState<HistoryItem[]>([]);
-  const [activeTab,   setActiveTab]   = useState<"input" | "table" | "topics">(
+  const [activeTab,   setActiveTab]   = useState<(typeof TABS)[number]["key"]>(
     "input"
   );
 
-  /* first mutation: submit event → impacts + summary --------------- */
+  /* -------------------------- mutations -------------------------- */
   const impactMutation = useMutation({
     mutationFn: (desc: string) => postEventImpact(desc, getAccessToken()),
     onSuccess: (_, desc) =>
       setHistory((h) => [{ id: Date.now(), description: desc }, ...h]),
   });
 
-  /* second mutation: send topics back to backend ------------------- */
   const topicsMutation = useMutation({
     mutationFn: (topics: string[]) => postIndustryTopics(topics, getAccessToken()),
   });
 
-  /* derived data --------------------------------------------------- */
+  /* ------------------------- derived data ------------------------ */
   const impacts: ImpactRow[] =
     Array.isArray(impactMutation.data?.impacts) ? impactMutation.data!.impacts : [];
 
-  const industryTopics: string[] = impactMutation.data?.industryTopics ?? [];
+  /* merge “industryTopics” from backend + any Keywords: lines */
+  const industryTopics: string[] = [
+    ...(impactMutation.data?.industryTopics ?? []),
+    ...(impactMutation.data?.keywordsFromContent ?? []),
+  ];
 
+  /** Keywords bank combines mock list with dynamic data */
   const keywords = [
     ...MOCK_KEYWORDS,
     ...industryTopics,
@@ -64,30 +76,22 @@ const EventImpactAccessor: React.FC = () => {
     ...impacts.map((i) => i.divisionGroup),
   ];
 
-  /* helpers -------------------------------------------------------- */
-  const resetAll = () => {
+  /* --------------------------- helpers --------------------------- */
+  const handleResetAll = () => {
     setDescription("");
     setActiveTab("input");
     impactMutation.reset();
     topicsMutation.reset();
   };
 
-  const tabs = [
-    { key: "input",  label: "Event Impact Enstetor" },
-    { key: "table",  label: "Impacted Policies"    },
-    { key: "topics", label: "Industry Topics"      },
-  ] as const;
-
-  /* ---------------------------------------------------------------- */
-  /*  UI                                                              */
-  /* ---------------------------------------------------------------- */
+  /* ----------------------------- UI ------------------------------ */
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
       <h1 className="text-2xl font-semibold mb-6">Event Impact Accessor</h1>
 
-      {/* Tabs ------------------------------------------------------- */}
+      {/* ---------------- Tabs header ---------------- */}
       <div className="mb-4 border-b border-gray-200 flex">
-        {tabs.map(({ key, label }) => (
+        {TABS.map(({ key, label }) => (
           <button
             key={key}
             onClick={() => setActiveTab(key)}
@@ -103,9 +107,9 @@ const EventImpactAccessor: React.FC = () => {
         ))}
       </div>
 
-      {/* Layout ----------------------------------------------------- */}
+      {/* ------------- Main two‑column layout ------------- */}
       <div className="flex flex-col md:flex-row gap-6">
-        {/* Left column: tab content -------------------------------- */}
+        {/* Left column – tab content */}
         <div className="flex-1">
           {activeTab === "input" && (
             <EventImpactForm
@@ -116,7 +120,7 @@ const EventImpactAccessor: React.FC = () => {
                 e.preventDefault();
                 if (description.trim()) impactMutation.mutate(description);
               }}
-              onReset={resetAll}
+              onReset={handleResetAll}
             />
           )}
 
@@ -141,7 +145,7 @@ const EventImpactAccessor: React.FC = () => {
           )}
         </div>
 
-        {/* Right column: history + keyword bank -------------------- */}
+        {/* Right column – history & keywords */}
         <div className="w-full md:w-80 flex flex-col gap-4">
           <HistoryList
             items={history}
