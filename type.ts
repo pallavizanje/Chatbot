@@ -1,29 +1,19 @@
+// src/api/postEventImpact.ts
 import type { ImpactResponse } from "@/types";
 import { ACCESS_TOKEN } from "@/constants";
 
-/**
- * POSTs the user's description, returns a normalised ImpactResponse.
- * It also detects a “Keywords:” line inside **any** markdown block and
- * converts it to `keywordsFromContent: string[]`.
- *
- * Keyword rules:
- *  1. If the part after “Keywords:” contains commas → split on commas.
- *  2. Otherwise treat the whole remainder (even with embedded \n) as ONE keyword.
- *  3. Internal new‑lines collapse to single spaces.
- */
 export const postEventImpact = async (
   description: string,
   token = ACCESS_TOKEN,
   chatbotIds: string[] = ["axasass"]
 ): Promise<ImpactResponse> => {
-  /* ------- request body ------- */
+  /* ---- request ------------------------------------------------- */
   const payload = {
     questionContent: [{ type: "text", value: description }],
     chatbotIds,
     stream: false,
   };
 
-  /* ------- call backend ------- */
   const res = await fetch("/api/event-impact", {
     method: "POST",
     headers: {
@@ -34,51 +24,69 @@ export const postEventImpact = async (
   });
   if (!res.ok) throw new Error(`Server responded ${res.status}`);
 
-  /* ---------------------------------------------------------------
-     RAW shape           { content:[{type:"text", value:"…"}], ... }
-     ------------------------------------------------------------- */
+  /* ---- normalise ---------------------------------------------- */
   const raw = await res.json();
 
-  /* ---- normalise content[] to guarantee array< {type,text} > ---- */
   const contentArr = Array.isArray(raw.content) ? raw.content : [];
   const textBlocks = contentArr
     .filter((c: any) => c?.type === "text" && typeof c.value === "string")
     .map((c: any) => c.value);
 
-  /* ------------- extract “Keywords:” (flexible rules) ------------ */
-  let extracted: string[] = [];
+  /* ---- extract Keywords: … ------------------------------------ */
+  const keywords: string[] = [];
 
   for (const block of textBlocks) {
-    // Look at each individual line to avoid matching across huge paragraphs
-    for (const line of block.split("\n")) {
-      const m = line.match(/^keywords\s*:\s*(.+)$/i);
-      if (!m) continue;
+    /** split into lines so we can inspect “Keywords:” and bullets separately */
+    const lines = block.split(/\r?\n/);
 
-      const tail = m[1].trim();
+    for (let i = 0; i < lines.length; i++) {
+      const kwLine = lines[i].match(/^keywords\s*:\s*(.*)$/i);
+      if (!kwLine) continue;
 
-      if (tail.includes(",")) {
-        // Split by commas → many keywords
-        extracted = tail
-          .split(",")
-          .map((k) => k.replace(/\s+/g, " ").trim()) // collapse inner \n /  double‑spaces
-          .filter(Boolean);
-      } else {
-        // No comma → treat entire remainder (plus any following lines) as ONE keyword
-        const joined = block
-          .slice(block.indexOf(m[1]))
-          .replace(/\s+/g, " ")
-          .trim();
-        extracted = [joined];
+      const tail = kwLine[1].trim();
+
+      /* 1️⃣  Same‑line, comma‑separated -------------------------- */
+      if (tail) {
+        keywords.push(
+          ...tail
+            .split(",")
+            .map((k) => k.replace(/\s+/g, " ").trim())
+            .filter(Boolean)
+        );
+        break; // stop processing this block
       }
-      break; // stop after first “Keywords:” match
+
+      /* 2️⃣ | 3️⃣  Multi‑line after “Keywords:” ------------------ */
+      for (let j = i + 1; j < lines.length; j++) {
+        const ln = lines[j].trim();
+
+        // Stop at blank line or next heading (e.g. 'Conclusion:')
+        if (!ln || /^[A-Za-z].+:\s*$/.test(ln)) break;
+
+        // Bullet list item  ->  push each bullet as separate keyword
+        if (/^[-*]\s+/.test(ln)) {
+          keywords.push(ln.replace(/^[-*]\s+/, "").replace(/\s+/g, " "));
+        } else {
+          // No bullet: treat the whole remaining text as ONE keyword (collapse \n)
+          const span = lines
+            .slice(j)
+            .join(" ")
+            .replace(/\s+/g, " ")
+            .trim();
+          if (span) keywords.push(span);
+          break;
+        }
+      }
+      break; // stop after the first “Keywords:” in this block
     }
-    if (extracted.length) break;
+
+    if (keywords.length) break; // stop scanning other blocks after first hit
   }
 
-  /* -------- assemble typed response -------- */
+  /* ---- assemble typed response -------------------------------- */
   return {
     ...raw,
-    content: textBlocks.map((v) => ({ type: "text", value: v })), // keep markdown text
-    keywordsFromContent: extracted,                               // NEW field
+    content: textBlocks.map((v) => ({ type: "text", value: v })),
+    keywordsFromContent: Array.from(new Set(keywords)), // dedupe
   } as ImpactResponse;
 };
