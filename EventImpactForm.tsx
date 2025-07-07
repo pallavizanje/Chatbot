@@ -1,6 +1,9 @@
+// src/components/EventImpactForm.tsx
 import React, { useRef } from "react";
 import { UseMutationResult } from "@tanstack/react-query";
-import { ImpactResponse } from "@/types";          // see note in file #3
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { ImpactResponse } from "@/types";
 
 interface Props {
   description: string;
@@ -19,11 +22,12 @@ const EventImpactForm: React.FC<Props> = ({
 }) => {
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
 
-  /* keyword drag‑and‑drop into textarea */
+  /* drag‑and‑drop keyword → textarea */
   const handleDrop = (e: React.DragEvent<HTMLTextAreaElement>) => {
     e.preventDefault();
     const kw = e.dataTransfer.getData("text/plain");
     if (!kw || !textAreaRef.current) return;
+
     const { selectionStart, selectionEnd } = textAreaRef.current;
     setDescription(
       description.slice(0, selectionStart) +
@@ -75,7 +79,7 @@ const EventImpactForm: React.FC<Props> = ({
         </div>
       </form>
 
-      {/* ── feedback ── */}
+      {/* ── feedback & summary ── */}
       {mutation.isError && (
         <p className="rounded bg-red-50 px-4 py-3 text-red-700">
           {(mutation.error as Error).message}
@@ -85,9 +89,17 @@ const EventImpactForm: React.FC<Props> = ({
       {mutation.isSuccess && (
         <>
           <h2 className="text-xl font-medium mb-2">Event Summary</h2>
-          <p className="whitespace-pre-line rounded bg-gray-50 p-4">
-            {mutation.data.summary}
-          </p>
+          {mutation.data.content.map((c, idx) => (
+            <div
+              key={idx}
+              className="prose prose-sm max-w-none rounded bg-gray-50 p-4 mb-4 last:mb-0"
+            >
+              {/* react‑markdown converts GitHub‑style markdown to HTML */}
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {c.value}
+              </ReactMarkdown>
+            </div>
+          ))}
         </>
       )}
     </div>
