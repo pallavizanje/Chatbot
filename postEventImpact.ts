@@ -2,23 +2,12 @@
 import type { ImpactResponse } from "@/types";
 import { ACCESS_TOKEN } from "@/constants";
 
-/**
- * Calls the Event‑Impact endpoint, normalises the payload,
- * and extracts every Keyword pattern we’ve seen:
- *
- *   • **Keywords:**\n- Bullet 1 …          (bullet list)
- *   • **Keywords**: foo, bar, baz          (same line, commas)
- *   • Keywords: Foo, Bar …                (plain, commas)
- *   • Keywords:\n- **Foo, Bar**            (bold bullet w/ commas)
- *
- * The deduplicated keywords end up in `keywordsFromContent`.
- */
 export const postEventImpact = async (
   description: string,
   token: string = ACCESS_TOKEN,
   chatbotIds: string[] = ["axasass"]
 ): Promise<ImpactResponse> => {
-  /* ---------- request body ---------- */
+  /* -------- request -------- */
   const payload = {
     questionContent: [{ type: "text", value: description }],
     chatbotIds,
@@ -35,28 +24,32 @@ export const postEventImpact = async (
   });
   if (!res.ok) throw new Error(`Server responded ${res.status}`);
 
-  /* ---------- raw data ---------- */
+  /* -------- raw data -------- */
   const raw = await res.json();
-
   const contentArr = Array.isArray(raw.content) ? raw.content : [];
   const textBlocks = contentArr
     .filter((c: any) => c?.type === "text" && typeof c.value === "string")
     .map((c: any) => c.value);
 
   /* =============================================================== */
-  /*  Keyword extraction — handles every pattern provided            */
+  /*               Keyword extraction (robust)                       */
   /* =============================================================== */
   const keywordSet = new Set<string>();
 
   const tidy = (s: string) =>
     s
-      .replace(/\*\*/g, "")        // drop **bold**
-      .replace(/^[\s\-*•]+/, "")   // drop bullet glyphs / spaces
-      .replace(/\s+/g, " ")        // collapse internal whitespace/newlines
+      .replace(/\*\*/g, "")        // strip markdown bold
+      .replace(/^[\s\-*•▪‣‧–—]+/, "") // leading bullets/dashes/glyphs
+      .replace(/\s+/g, " ")        // collapse whitespace and newlines
       .trim();
 
-  const markerRegex = /^\s*(\*\*)?keywords?(\*\*)?\s*[:：]\s*(.*)$/i;
-  const bulletRegex = /^\s*[-*•]\s+(.*)$/;
+  /* marker  =  optional **, "keyword" or "keywords", optional **, colon */
+  const markerRegex =
+    /^\s*(\*\*)?\s*keyword[s]?(\*\*)?\s*[:：]\s*(.*)$/i;
+
+  /* bullet  =  -, *, •, ▪, ‣, en‑dash, em‑dash */
+  const bulletRegex =
+    /^\s*[-*•▪‣‧–—]\s+(.*)$/;
 
   outer: for (const block of textBlocks) {
     const lines = block.split(/\r?\n/);
@@ -65,7 +58,7 @@ export const postEventImpact = async (
       const m = lines[i].match(markerRegex);
       if (!m) continue;
 
-      /* ① Same‑line comma list */
+      /* ① same‑line comma list */
       if (m[3]?.trim()) {
         m[3]
           .split(",")
@@ -75,11 +68,11 @@ export const postEventImpact = async (
         break outer;
       }
 
-      /* ② / ③ Bullet or plain lines after marker */
+      /* ② multi‑line bullets or plain lines */
       for (let j = i + 1; j < lines.length; j++) {
         const ln = lines[j].trim();
-        if (!ln) break;                               // blank line ends block
-        if (/^[A-Za-z].+:\s*$/.test(ln)) break;       // next heading ends block
+        if (!ln) break;                            // blank line
+        if (/^[A-Za-z].+:\s*$/.test(ln)) break;    // next heading
 
         const bullet = ln.match(bulletRegex);
         const payload = bullet ? bullet[1] : ln;
@@ -95,11 +88,37 @@ export const postEventImpact = async (
           if (clean) keywordSet.add(clean);
         }
       }
-      break outer; // stop after first Keywords: group found
+      break outer;
     }
   }
 
-  /* ---------- assemble typed object ---------- */
+  /* ③ fallback: first line with ≥ 4 commas */
+  if (!keywordSet.size) {
+    for (const block of textBlocks) {
+      const maybe = block
+        .split(/\r?\n/)
+        .find((l) => l.split(",").length >= 4 && l.length < 300);
+
+      if (maybe) {
+        maybe
+          .split(",")
+          .map(tidy)
+          .filter(Boolean)
+          .forEach((k) => keywordSet.add(k));
+        break;
+      }
+    }
+  }
+
+  /* log unexpected misses */
+  if (!keywordSet.size) {
+    console.warn(
+      "❗ Keyword extractor found nothing. Dumping blocks:",
+      textBlocks.join("\n———\n")
+    );
+  }
+
+  /* -------- assemble typed object -------- */
   return {
     ...raw,
     content: textBlocks.map((v) => ({ type: "text", value: v })),
