@@ -1,4 +1,3 @@
-// src/api/postEventImpact.ts
 import type { ImpactResponse } from "@/types";
 import { ACCESS_TOKEN } from "@/constants";
 
