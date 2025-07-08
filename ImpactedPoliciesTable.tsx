@@ -1,20 +1,43 @@
 import React from "react";
-import { ImpactRow } from "@/types";
+import { useQuery } from "@tanstack/react-query";
+import { postImpactedPolicies } from "@/api/postImpactedPolicies";
+import type { ImpactRow } from "@/types";
 
 interface Props {
-  impacts: ImpactRow[];
-  ready: boolean;
+  keywords: string[];
 }
 
-const ImpactedPoliciesTable: React.FC<Props> = ({ impacts, ready }) => {
-  if (!ready) {
+const ImpactedPoliciesTable: React.FC<Props> = ({ keywords }) => {
+  /* skip the query until we actually have keywords */
+  const { data, isLoading, isError, error } = useQuery({
+    queryKey: ["impactedPolicies", keywords],
+    queryFn: () => postImpactedPolicies(keywords),
+    enabled: !!keywords.length, // don't run on empty array
+  });
+
+  if (!keywords.length)
     return (
-      <p className="italic text-gray-500">
-        Submit an event to see impacted policies.
+      <p className="italic text-gray-500">No keywords available yet.</p>
+    );
+
+  if (isLoading)
+    return <p className="italic text-gray-500">Loading policies…</p>;
+
+  if (isError)
+    return (
+      <p className="rounded bg-red-50 px-4 py-3 text-red-700">
+        {(error as Error).message}
       </p>
     );
-  }
 
+  if (!data?.length)
+    return (
+      <p className="italic text-gray-500">
+        API returned no impacted‑policy rows.
+      </p>
+    );
+
+  /* ---------- render table ---------- */
   return (
     <div className="overflow-x-auto rounded border border-gray-200">
       <table className="min-w-full divide-y divide-gray-200 text-sm">
@@ -46,7 +69,7 @@ const ImpactedPoliciesTable: React.FC<Props> = ({ impacts, ready }) => {
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-100">
-          {impacts.map((row, idx) => (
+          {data.map((row: ImpactRow, idx: number) => (
             <tr key={idx}>
               <td className="px-4 py-2 whitespace-nowrap">
                 {row.divisionGroup}
