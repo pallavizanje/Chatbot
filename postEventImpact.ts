@@ -1,17 +1,24 @@
+// src/api/postEventImpact.ts
 import type { ImpactResponse } from "@/types";
 import { ACCESS_TOKEN } from "@/constants";
 
 /**
- * POST / event‑impact → normalised ImpactResponse
+ * Calls the Event‑Impact endpoint, normalises the payload,
+ * and extracts every Keyword pattern we’ve seen:
  *
- * Robustly extracts every keyword pattern the backend has shown so far.
+ *   • **Keywords:**\n- Bullet 1 …          (bullet list)
+ *   • **Keywords**: foo, bar, baz          (same line, commas)
+ *   • Keywords: Foo, Bar …                (plain, commas)
+ *   • Keywords:\n- **Foo, Bar**            (bold bullet w/ commas)
+ *
+ * The deduplicated keywords end up in `keywordsFromContent`.
  */
 export const postEventImpact = async (
   description: string,
   token: string = ACCESS_TOKEN,
   chatbotIds: string[] = ["axasass"]
 ): Promise<ImpactResponse> => {
-  /* -------- request -------- */
+  /* ---------- request body ---------- */
   const payload = {
     questionContent: [{ type: "text", value: description }],
     chatbotIds,
@@ -28,7 +35,7 @@ export const postEventImpact = async (
   });
   if (!res.ok) throw new Error(`Server responded ${res.status}`);
 
-  /* -------- raw data -------- */
+  /* ---------- raw data ---------- */
   const raw = await res.json();
 
   const contentArr = Array.isArray(raw.content) ? raw.content : [];
@@ -36,68 +43,63 @@ export const postEventImpact = async (
     .filter((c: any) => c?.type === "text" && typeof c.value === "string")
     .map((c: any) => c.value);
 
-  /* ===== Keyword extraction ===== */
+  /* =============================================================== */
+  /*  Keyword extraction — handles every pattern provided            */
+  /* =============================================================== */
   const keywordSet = new Set<string>();
 
-  const clean = (s: string) =>
+  const tidy = (s: string) =>
     s
-      .replace(/\*\*/g, "") // drop markdown bold
-      .replace(/\s+/g, " ") // collapse whitespace + newlines
+      .replace(/\*\*/g, "")        // drop **bold**
+      .replace(/^[\s\-*•]+/, "")   // drop bullet glyphs / spaces
+      .replace(/\s+/g, " ")        // collapse internal whitespace/newlines
       .trim();
 
-  for (const block of textBlocks) {
-    // walk line‑by‑line so we can capture bullets under the marker
+  const markerRegex = /^\s*(\*\*)?keywords?(\*\*)?\s*[:：]\s*(.*)$/i;
+  const bulletRegex = /^\s*[-*•]\s+(.*)$/;
+
+  outer: for (const block of textBlocks) {
     const lines = block.split(/\r?\n/);
 
     for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
+      const m = lines[i].match(markerRegex);
+      if (!m) continue;
 
-      /* match **Keywords:**   OR   Keywords:   (case‑insensitive) */
-      const kwMatch = line.match(/^\s*(\*\*)?keywords?(\*\*)?\s*:\s*(.*)$/i);
-      if (!kwMatch) continue;
-
-      const tail = kwMatch[3]; // what’s after the colon on the same line
-
-      /* ---------- Case ① same‑line ---------- */
-      if (tail) {
-        tail
+      /* ① Same‑line comma list */
+      if (m[3]?.trim()) {
+        m[3]
           .split(",")
-          .map(clean)
+          .map(tidy)
           .filter(Boolean)
           .forEach((k) => keywordSet.add(k));
-        break; // stop scanning this block
+        break outer;
       }
 
-      /* ---------- Case ② / ③ multi‑line list ---------- */
+      /* ② / ③ Bullet or plain lines after marker */
       for (let j = i + 1; j < lines.length; j++) {
         const ln = lines[j].trim();
+        if (!ln) break;                               // blank line ends block
+        if (/^[A-Za-z].+:\s*$/.test(ln)) break;       // next heading ends block
 
-        // end if blank line or new section like "**Conclusion:**"
-        if (!ln || /^[*_]*[A-Za-z].+:\s*$/i.test(ln)) break;
-
-        // bullet line?
-        const bulletMatch = ln.match(/^[-*]\s+(.*)$/);
-        const payload = clean(bulletMatch ? bulletMatch[1] : ln);
+        const bullet = ln.match(bulletRegex);
+        const payload = bullet ? bullet[1] : ln;
 
         if (payload.includes(",")) {
-          // bullet that still contains commas → many
           payload
             .split(",")
-            .map(clean)
+            .map(tidy)
             .filter(Boolean)
             .forEach((k) => keywordSet.add(k));
-        } else if (payload) {
-          keywordSet.add(payload);
+        } else {
+          const clean = tidy(payload);
+          if (clean) keywordSet.add(clean);
         }
       }
-
-      break; // stop after first Keywords: in this block
+      break outer; // stop after first Keywords: group found
     }
-
-    if (keywordSet.size) break; // stop after first block containing keywords
   }
 
-  /* -------- assemble typed response -------- */
+  /* ---------- assemble typed object ---------- */
   return {
     ...raw,
     content: textBlocks.map((v) => ({ type: "text", value: v })),
